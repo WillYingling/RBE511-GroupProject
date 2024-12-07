@@ -1,0 +1,50 @@
+BLOCK_SIZE   = 0.3
+ROBOT_RADIUS = 0.0704;
+
+function init() {
+    # initialize two swarms: one to the left of the wall and one to the right
+    swarm_left = swarm.create(1)
+    swarm_left.select(pose.position.x < 0)
+    swarm_right = swarm_left.others(2)
+}
+
+function step() {
+    swarm_left.exec(push_right)
+    swarm_right.exec(push_left)
+}
+
+function reset() {
+}
+
+function destroy() {
+}
+
+function push_right() {
+    # calculate heading error in [-pi, pi]
+    yaw_error = (0.0 - pose.orientation.yaw + math.pi) % (2 * math.pi) - math.pi
+
+    if (math.abs(yaw_error) > 1.0 * math.pi / 180.0) {
+        Kp = 10.0
+        w = Kp * yaw_error
+        set_wheels(-w, w)
+    } else if (pose.position.x < 0 - 0.5 * BLOCK_SIZE - ROBOT_RADIUS) {
+        set_wheels(10.0, 10.0)
+    } else {
+        set_wheels(0.0, 0.0)
+    }
+}
+
+function push_left() {
+    # calculate heading error in [-pi, pi]
+    yaw_error = (math.pi - pose.orientation.yaw + math.pi) % (2 * math.pi) - math.pi
+
+    if (math.abs(yaw_error) > 1.0 * math.pi / 180.0) {
+        Kp = 10.0
+        w = Kp * yaw_error
+        set_wheels(-w, w)
+    } else if (pose.position.x > 0 + 0.5 * BLOCK_SIZE + ROBOT_RADIUS) {
+        set_wheels(10.0, 10.0)
+    } else {
+        set_wheels(0.0, 0.0)
+    }
+}
