@@ -1,16 +1,118 @@
-BLOCK_SIZE   = 0.3
-ROBOT_RADIUS = 0.0704;
+# the radius of the robot
+ROBOT_RADIUS = 0.0704
+
+# the location of the wall to build
+WALL_LOCATION = 0.0
+
+# the length of the wall to build
+WALL_LENGTH = 4.0
+
+# the length of the blocks used for construction (assumes square blocks with length = width)
+BLOCK_LENGTH = 0.3
 
 function init() {
     # initialize two swarms: one to the left of the wall and one to the right
     swarm_left = swarm.create(1)
-    swarm_left.select(pose.position.x < 0)
+    swarm_left.select(pose.position.x < WALL_LOCATION)
     swarm_right = swarm_left.others(2)
+
+    # initialize stigmergy representing the state of each desired block placement
+    # the state is either "unassigned", "placed", or "<y-coordinate of assigned agent>"
+    blocks = stigmergy.create(1)
+
+    # the number of blocks needed to create the wall
+    num_blocks = math.floor(WALL_LENGTH / BLOCK_LENGTH)
+
+    # the length of the wall actually covered by blocks
+    covered_length = num_blocks * BLOCK_LENGTH
+
+    # the length of the gap between blocks
+    gap_length = (WALL_LENGTH - covered_length) / (num_blocks + 1)
+
+    # compute desired block locations and mark them as unassigned
+    block_locations = {}
+    i = 0
+    while (i < num_blocks) {
+        block_locations[i] = -0.5 * WALL_LENGTH + gap_length + 0.5 * BLOCK_LENGTH + i * (BLOCK_LENGTH + gap_length)
+        blocks.put(i, "unassigned")
+        i = i + 1
+    }
+
+    # index of block to drive towards (initially unassigned)
+    goal_block = -1
+
+    # conflicts will be resolved by favoring closer agents
+    blocks.onconflict(function(k, l, r) {
+        # does not matter if they are the same
+        # choose report for lower id just to resolve conflict
+        if (l.data == r.data) {
+            if (l.robot < r.robot) {
+                return l
+            }
+            return r
+        }
+
+        log("robot: ", id, " - conflict encountered for block location ", block_locations[k], " - robot=", l.robot, " with y=", l.data, " at t=", l.timestamp, " vs robot=", r.robot, " with y=", r.data, " at t=", r.timestamp)
+
+        # priority goes to marking a block as placed
+        if (l.data == "placed") {
+            return l
+        }
+        if (r.data == "placed") {
+            return r
+        }
+
+        # priority goes to marking a block as assigned
+        if (l.data == "unassigned") {
+            return r
+        }
+        if (r.data == "unassigned") {
+            return l
+        }
+
+        # priority goes to closer y-coordinate
+        y_local = string.tofloat(l.data)
+        if (isnil(y_local)) {
+            return r
+        }
+
+        y_remote = string.tofloat(r.data)
+        if (isnil(y_remote)) {
+            return l
+        }
+
+        d_local  = math.abs(k - y_local)
+        d_remote = math.abs(k - y_remote)
+
+        if (d_local < d_remote) {
+            return l
+        }
+        
+        return r
+    })
+
+    # loser get unassigned
+    blocks.onconflictlost(function(k, l) {
+        if (k == goal_block) {
+            log("robot: ", id, " - conflict lost for block location ", block_locations[k], " with y=", l.data)
+            goal_block = -1
+        }
+    })
 }
 
 function step() {
     swarm_left.exec(push_right)
     swarm_right.exec(push_left)
+
+    # assign a block to push towards
+    if (goal_block < 0) {
+        goal_block = get_goal_block()
+    }
+
+    if (goal_block >= 0) {
+        log("robot: ", id, " - at ", pose.position.y, " - assigned to block ", block_locations[goal_block])
+        blocks.put(goal_block, string.tostring(pose.position.y))
+    }
 }
 
 function reset() {
@@ -27,7 +129,7 @@ function push_right() {
         Kp = 10.0
         w = Kp * yaw_error
         set_wheels(-w, w)
-    } else if (pose.position.x < 0 - 0.5 * BLOCK_SIZE - ROBOT_RADIUS) {
+    } else if (pose.position.x < 0 - 0.5 * BLOCK_LENGTH - ROBOT_RADIUS) {
         set_wheels(10.0, 10.0)
     } else {
         set_wheels(0.0, 0.0)
@@ -42,9 +144,26 @@ function push_left() {
         Kp = 10.0
         w = Kp * yaw_error
         set_wheels(-w, w)
-    } else if (pose.position.x > 0 + 0.5 * BLOCK_SIZE + ROBOT_RADIUS) {
+    } else if (pose.position.x > 0 + 0.5 * BLOCK_LENGTH + ROBOT_RADIUS) {
         set_wheels(10.0, 10.0)
     } else {
         set_wheels(0.0, 0.0)
     }
+}
+
+function get_goal_block() {
+    d_min = 1000
+    k_min = -1
+
+    blocks.foreach(function(key, value, robot) {
+        if (value == "unassigned") {
+            d = math.abs(block_locations[key] - pose.position.y)
+            if ((d < d_min)) {
+                k_min = key
+                d_min = d
+            }
+        }
+    })
+
+    return k_min
 }
