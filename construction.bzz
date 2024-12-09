@@ -1,6 +1,9 @@
 # the radius of the robot
 ROBOT_RADIUS = 0.0704
 
+# maximum wheel speed
+MAX_SPEED = 10.0
+
 # the location of the wall to build
 WALL_LOCATION = 0.0
 
@@ -10,12 +13,54 @@ WALL_LENGTH = 4.0
 # the length of the blocks used for construction (assumes square blocks with length = width)
 BLOCK_LENGTH = 0.3
 
-function init() {
-    # initialize two swarms: one to the left of the wall and one to the right
-    swarm_left = swarm.create(1)
-    swarm_left.select(pose.position.x < WALL_LOCATION)
-    swarm_right = swarm_left.others(2)
+# the different states of the agent - it is either searching for blocks, attempting to push them,
+# or escaping a trap
+SEARCH = 0
+PUSH   = 1
+ESCAPE = 2
 
+# threshold used to denote contact with object
+CONTACT_THRESH = 0.9999
+
+# threshold used to denote a robot is stuck
+STUCK_THRES = 0.001
+
+# gains used for proportional controller
+Kp_dist    = 100
+Kp_heading = 5
+
+function init() {
+    reset()
+}
+
+function step() {
+    if (state == SEARCH) {
+        process_search_state()
+    }
+
+    if (state == PUSH) {
+        process_push_state()
+    }
+
+    if (state == ESCAPE) {
+        process_escape_state()
+    }
+
+    max_prox = math.max(proximity[0].value, math.max(proximity[1].value, proximity[7].value))
+    if (state == SEARCH) {
+        debug.print("SEARCH ", max_prox)
+    } else if (state == PUSH) {
+        debug.print("PUSH ", max_prox)
+    } else {
+        debug.print("ESCAPE ", max_prox)
+    }
+
+    # record pose
+    last_x = pose.position.x
+    last_y = pose.position.y
+}
+
+function reset() {
     # initialize stigmergy representing the state of each desired block placement
     # the state is either "unassigned", "placed", or "<y-coordinate of assigned agent>"
     blocks = stigmergy.create(1)
@@ -40,6 +85,16 @@ function init() {
 
     # index of block to drive towards (initially unassigned)
     goal_block = -1
+
+    # start by searching for obstacles
+    state = SEARCH
+
+    # drive forward
+    set_wheels(MAX_SPEED, MAX_SPEED)
+
+    # record pose
+    last_x = pose.position.x
+    last_y = pose.position.y
 
     # conflicts will be resolved by favoring closer agents
     blocks.onconflict(function(k, l, r) {
@@ -87,7 +142,7 @@ function init() {
         if (d_local < d_remote) {
             return l
         }
-        
+
         return r
     })
 
@@ -100,70 +155,155 @@ function init() {
     })
 }
 
-function step() {
-    swarm_left.exec(push_right)
-    swarm_right.exec(push_left)
-
-    # assign a block to push towards
-    if (goal_block < 0) {
-        goal_block = get_goal_block()
-    }
-
-    if (goal_block >= 0) {
-        log("robot: ", id, " - at ", pose.position.y, " - assigned to block ", block_locations[goal_block])
-        blocks.put(goal_block, string.tostring(pose.position.y))
-    }
-}
-
-function reset() {
-}
-
 function destroy() {
 }
 
-function push_right() {
-    # calculate heading error in [-pi, pi]
-    yaw_error = (0.0 - pose.orientation.yaw + math.pi) % (2 * math.pi) - math.pi
-
-    if (math.abs(yaw_error) > 1.0 * math.pi / 180.0) {
-        Kp = 10.0
-        w = Kp * yaw_error
-        set_wheels(-w, w)
-    } else if (pose.position.x < 0 - 0.5 * BLOCK_LENGTH - ROBOT_RADIUS) {
-        set_wheels(10.0, 10.0)
+function process_search_state() {
+    # check if we are in contact with an object
+    if (get_contact()) {
+        # transition to push state
+        state = PUSH
+        log("robot: ", id, " - contact made - transition SEARCH to PUSH")
     } else {
-        set_wheels(0.0, 0.0)
+        # drive forward
+        set_wheels(MAX_SPEED, MAX_SPEED)
     }
 }
 
-function push_left() {
-    # calculate heading error in [-pi, pi]
-    yaw_error = (math.pi - pose.orientation.yaw + math.pi) % (2 * math.pi) - math.pi
-
-    if (math.abs(yaw_error) > 1.0 * math.pi / 180.0) {
-        Kp = 10.0
-        w = Kp * yaw_error
-        set_wheels(-w, w)
-    } else if (pose.position.x > 0 + 0.5 * BLOCK_LENGTH + ROBOT_RADIUS) {
-        set_wheels(10.0, 10.0)
+function process_push_state() {
+    # check if we are in contact with an object
+    if (not get_contact()) {
+        # transition to search state
+        state = SEARCH
+        log("robot: ", id, " - contact lost - transition PUSH to SEARCH ")
     } else {
-        set_wheels(0.0, 0.0)
+        # make sure we have a task
+        new = false
+        if (goal_block < 0) {
+            goal_block = get_goal_block()
+            new        = true
+        }
+
+        if (goal_block < 0) {
+            state = ESCAPE
+            log("robot: ", id, " - no accomplishable tasks - transition PUSH to ESCAPE")
+        } else {
+            blocks.put(goal_block, string.tostring(pose.position.y))
+            log("robot: ", id, " - assigned to task ", goal_block, " at y=", block_locations[goal_block])
+
+            # check if we are done with our task
+            goal_distance = get_goal_distance()
+            if (goal_distance < 0.01) {
+                # mark task as complete
+                blocks.put(goal_block, "placed")
+                goal_block = -1
+
+                # transition to escape state
+                state = ESCAPE
+                log("robot: ", id, " - task complete - transition PUSH to ESCAPE")
+            } else {
+                # check if we are stuck
+                traveled_distance = math.sqrt((pose.position.x - last_x) ^ 2 + (pose.position.y - last_y) ^ 2)
+                if ((not new) and (traveled_distance < STUCK_THRES)) {
+                    # mark task as incomplete
+                    blocks.put(goal_block, "unassigned")
+                    goal_block = -1
+
+                    # transition to escape state
+                    state = ESCAPE
+                    log("robot: ", id, " - stuck - transition PUSH to ESCAPE")
+                } else {
+                    # start with forward motion
+                    base_speed = math.min(MAX_SPEED, Kp_dist * goal_distance)
+
+                    # adjust motion to account for heading error
+                    goal_heading = get_goal_heading()
+                    yaw_error    = (goal_heading - pose.orientation.yaw + math.pi) % (2 * math.pi) - math.pi
+                    w            = Kp_heading * yaw_error
+
+                    # drive
+                    set_wheels(base_speed - w, base_speed + w)
+                }
+            }
+        }
     }
+}
+
+function process_escape_state() {
+    if (get_contact()) {
+        # rotate
+        set_wheels(-MAX_SPEED, MAX_SPEED)
+    } else {
+        state = SEARCH
+        log("robot: ", id, " - escaped - transition ESCAPE to SEARCH")
+    }
+}
+
+function get_contact() {
+    return proximity[0].value >= CONTACT_THRESH or proximity[1].value >= CONTACT_THRESH or proximity[7].value >= CONTACT_THRESH
 }
 
 function get_goal_block() {
-    d_min = 1000
+    d_min = 1000.0
     k_min = -1
 
     blocks.foreach(function(key, value, robot) {
+        # check if block is unassigned
         if (value == "unassigned") {
-            d = math.abs(block_locations[key] - pose.position.y)
-            if ((d < d_min)) {
-                k_min = key
-                d_min = d
+            # determine if desired block location is above or below the robot
+            # as well as if it is to the right or left of the robot
+            heading = pose.orientation.yaw
+            dx      = WALL_LOCATION - pose.position.x
+            dy      = block_locations[key] - pose.position.y
+            above   = (dy > 0.0)
+            right   = (dx > 0.0)
+            east    = ((-0.5 * math.pi < heading) and (heading < 0.5 * math.pi))
+            north   = (heading > 0.0)
+
+            if ((above == north) and (right == east)) {
+                # check if new closest was found
+                d = math.abs(dy)
+                if (d < d_min) {
+                    k_min = key
+                    d_min = d
+                }
             }
         }
     })
 
     return k_min
+}
+
+function get_goal_distance() {
+    distance = 0
+
+    if (goal_block >= 0) {
+        sign = 1
+        if (pose.position.x < WALL_LOCATION) {
+            sign = -1
+        }
+
+        goal_x   = WALL_LOCATION + sign * (0.5 * BLOCK_LENGTH + ROBOT_RADIUS)
+        goal_y   = block_locations[goal_block]
+        distance = math.sqrt((goal_y - pose.position.y) ^ 2 + (goal_x - pose.position.x) ^ 2)
+    }
+
+    return distance
+}
+
+function get_goal_heading() {
+    heading = 0
+
+    if (goal_block >= 0) {
+        sign = 1
+        if (pose.position.x < WALL_LOCATION) {
+            sign = -1
+        }
+
+        goal_x  = WALL_LOCATION + sign * (0.5 * BLOCK_LENGTH + ROBOT_RADIUS)
+        goal_y  = block_locations[goal_block]
+        heading = math.atan(goal_y - pose.position.y, goal_x - pose.position.x)
+    }
+
+    return heading
 }
