@@ -20,10 +20,10 @@ PUSH   = 1
 ESCAPE = 2
 
 # threshold used to denote contact with object
-CONTACT_THRESH = 0.9999
+CONTACT_THRESH = 0.6
 
 # threshold used to denote a robot is stuck
-STUCK_THRES = 0.001
+STUCK_THRESH = 0.001
 
 # gains used for proportional controller
 Kp_dist    = 100
@@ -58,6 +58,7 @@ function step() {
     # record pose
     last_x = pose.position.x
     last_y = pose.position.y
+    last_h = pose.orientation.yaw
 }
 
 function reset() {
@@ -95,6 +96,7 @@ function reset() {
     # record pose
     last_x = pose.position.x
     last_y = pose.position.y
+    last_h = pose.orientation.yaw
 
     # conflicts will be resolved by favoring closer agents
     blocks.onconflict(function(k, l, r) {
@@ -165,8 +167,17 @@ function process_search_state() {
         state = PUSH
         log("robot: ", id, " - contact made - transition SEARCH to PUSH")
     } else {
-        # drive forward
-        set_wheels(MAX_SPEED, MAX_SPEED)
+         # check if we are stuck
+        traveled_distance = math.sqrt((pose.position.x - last_x) ^ 2 + (pose.position.y - last_y) ^ 2)
+        traveled_heading  = (last_h - pose.orientation.yaw + math.pi) % (2 * math.pi) - math.pi
+        if ((math.abs(traveled_heading) < 1.0 * math.pi / 180) and (traveled_distance < STUCK_THRESH)) {
+            # transition to escape state
+            state = ESCAPE
+            log("robot: ", id, " - stuck - transition SEARCH to ESCAPE")
+        } else {
+            # drive forward
+            set_wheels(MAX_SPEED, MAX_SPEED)
+        }
     }
 }
 
@@ -202,27 +213,38 @@ function process_push_state() {
                 state = ESCAPE
                 log("robot: ", id, " - task complete - transition PUSH to ESCAPE")
             } else {
-                # check if we are stuck
-                traveled_distance = math.sqrt((pose.position.x - last_x) ^ 2 + (pose.position.y - last_y) ^ 2)
-                if ((not new) and (traveled_distance < STUCK_THRES)) {
+                # check to make sure we are not moving a placed block
+                if ((math.abs(WALL_LOCATION - pose.position.x) < 0.5 * BLOCK_LENGTH + ROBOT_RADIUS) and (get_closest_block() != goal_block)) {
                     # mark task as incomplete
                     blocks.put(goal_block, "unassigned")
                     goal_block = -1
 
                     # transition to escape state
                     state = ESCAPE
-                    log("robot: ", id, " - stuck - transition PUSH to ESCAPE")
+                    log("robot: ", id, " - avoiding moving placed block - transition PUSH to ESCAPE")
                 } else {
-                    # start with forward motion
-                    base_speed = math.min(MAX_SPEED, Kp_dist * goal_distance)
+                    # check if we are stuck
+                    traveled_distance = math.sqrt((pose.position.x - last_x) ^ 2 + (pose.position.y - last_y) ^ 2)
+                    if ((not new) and (traveled_distance < STUCK_THRESH)) {
+                        # mark task as incomplete
+                        blocks.put(goal_block, "unassigned")
+                        goal_block = -1
 
-                    # adjust motion to account for heading error
-                    goal_heading = get_goal_heading()
-                    yaw_error    = (goal_heading - pose.orientation.yaw + math.pi) % (2 * math.pi) - math.pi
-                    w            = Kp_heading * yaw_error
+                        # transition to escape state
+                        state = ESCAPE
+                        log("robot: ", id, " - stuck - transition PUSH to ESCAPE")
+                    } else {
+                        # start with forward motion
+                        base_speed = math.min(MAX_SPEED, Kp_dist * goal_distance)
 
-                    # drive
-                    set_wheels(base_speed - w, base_speed + w)
+                        # adjust motion to account for heading error
+                        goal_heading = get_goal_heading()
+                        yaw_error    = (goal_heading - pose.orientation.yaw + math.pi) % (2 * math.pi) - math.pi
+                        w            = Kp_heading * yaw_error
+
+                        # drive
+                        set_wheels(base_speed - w, base_speed + w)
+                    }
                 }
             }
         }
@@ -268,6 +290,22 @@ function get_goal_block() {
                     d_min = d
                 }
             }
+        }
+    })
+
+    return k_min
+}
+
+function get_closest_block() {
+    d_min = 1000.0
+    k_min = -1
+
+    blocks.foreach(function(key, value, robot) {
+        # check if new closest was found
+        d = math.abs(dy)
+        if (d < d_min) {
+            k_min = key
+            d_min = d
         }
     })
 
