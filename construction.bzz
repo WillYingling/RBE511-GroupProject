@@ -1,5 +1,4 @@
 include "search.bzz"
-include "push.bzz"
 
 # the radius of the robot
 ROBOT_RADIUS = 0.0704
@@ -23,7 +22,7 @@ PUSH   = 1
 ESCAPE = 2
 
 # threshold used to denote contact with object
-CONTACT_THRESH = 0.8
+CONTACT_THRESH = 0.6
 
 # threshold used to denote a robot is stuck
 STUCK_THRESH = 0.001
@@ -64,7 +63,7 @@ function step() {
     # record pose
     last_x = pose.position.x
     last_y = pose.position.y
-
+    last_h = pose.orientation.yaw
 }
 
 function reset() {
@@ -102,6 +101,7 @@ function reset() {
     # record pose
     last_x = pose.position.x
     last_y = pose.position.y
+    last_h = pose.orientation.yaw
 
     # conflicts will be resolved by favoring closer agents
     blocks.onconflict(function(k, l, r) {
@@ -173,6 +173,76 @@ function change_state(new_state) {
     state = new_state
 }
 
+function process_push_state() {
+    # check if we are in contact with an object
+    if (not get_contact()) {
+        # transition to search state
+        state = SEARCH
+        log("robot: ", id, " - contact lost - transition PUSH to SEARCH ")
+    } else {
+        # make sure we have a task
+        new = false
+        if (goal_block < 0) {
+            goal_block = get_goal_block()
+            new        = true
+        }
+
+        if (goal_block < 0) {
+            state = ESCAPE
+            log("robot: ", id, " - no accomplishable tasks - transition PUSH to ESCAPE")
+        } else {
+            blocks.put(goal_block, string.tostring(pose.position.y))
+            log("robot: ", id, " - assigned to task ", goal_block, " at y=", block_locations[goal_block])
+
+            # check if we are done with our task
+            goal_distance = get_goal_distance()
+            if (goal_distance < 0.01) {
+                # mark task as complete
+                blocks.put(goal_block, "placed")
+                goal_block = -1
+
+                # transition to escape state
+                state = ESCAPE
+                log("robot: ", id, " - task complete - transition PUSH to ESCAPE")
+            } else {
+                # check to make sure we are not moving a placed block
+                if ((math.abs(WALL_LOCATION - pose.position.x) < 0.5 * BLOCK_LENGTH + ROBOT_RADIUS) and (get_closest_block() != goal_block)) {
+                    # mark task as incomplete
+                    blocks.put(goal_block, "unassigned")
+                    goal_block = -1
+
+                    # transition to escape state
+                    state = ESCAPE
+                    log("robot: ", id, " - avoiding moving placed block - transition PUSH to ESCAPE")
+                } else {
+                    # check if we are stuck
+                    traveled_distance = math.sqrt((pose.position.x - last_x) ^ 2 + (pose.position.y - last_y) ^ 2)
+                    if ((not new) and (traveled_distance < STUCK_THRESH)) {
+                        # mark task as incomplete
+                        blocks.put(goal_block, "unassigned")
+                        goal_block = -1
+
+                        # transition to escape state
+                        state = ESCAPE
+                        log("robot: ", id, " - stuck - transition PUSH to ESCAPE")
+                    } else {
+                        # start with forward motion
+                        base_speed = math.min(MAX_SPEED, Kp_dist * goal_distance)
+
+                        # adjust motion to account for heading error
+                        goal_heading = get_goal_heading()
+                        yaw_error    = (goal_heading - pose.orientation.yaw + math.pi) % (2 * math.pi) - math.pi
+                        w            = Kp_heading * yaw_error
+
+                        # drive
+                        set_wheels(base_speed - w, base_speed + w)
+                    }
+                }
+            }
+        }
+    }
+}
+
 function process_escape_state() {
 		new_heading = normalize_angle(new_heading)
     if (math.abs(new_heading - pose.orientation.yaw) > 0.1) {
@@ -213,6 +283,22 @@ function get_goal_block() {
                     d_min = d
                 }
             }
+        }
+    })
+
+    return k_min
+}
+
+function get_closest_block() {
+    d_min = 1000.0
+    k_min = -1
+
+    blocks.foreach(function(key, value, robot) {
+        # check if new closest was found
+        d = math.abs(dy)
+        if (d < d_min) {
+            k_min = key
+            d_min = d
         }
     })
 
