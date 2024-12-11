@@ -1,3 +1,6 @@
+include "search.bzz"
+include "push.bzz"
+
 # the radius of the robot
 ROBOT_RADIUS = 0.0704
 
@@ -8,7 +11,7 @@ MAX_SPEED = 10.0
 WALL_LOCATION = 0.0
 
 # the length of the wall to build
-WALL_LENGTH = 4.0
+WALL_LENGTH = 2.5
 
 # the length of the blocks used for construction (assumes square blocks with length = width)
 BLOCK_LENGTH = 0.3
@@ -20,14 +23,17 @@ PUSH   = 1
 ESCAPE = 2
 
 # threshold used to denote contact with object
-CONTACT_THRESH = 0.9999
+CONTACT_THRESH = 0.8
 
 # threshold used to denote a robot is stuck
-STUCK_THRES = 0.001
+STUCK_THRESH = 0.001
 
 # gains used for proportional controller
 Kp_dist    = 100
 Kp_heading = 5
+
+new_heading = 0;
+next_state = SEARCH;
 
 function init() {
     reset()
@@ -35,7 +41,7 @@ function init() {
 
 function step() {
     if (state == SEARCH) {
-        process_search_state()
+        process_search_state2()
     }
 
     if (state == PUSH) {
@@ -52,12 +58,13 @@ function step() {
     } else if (state == PUSH) {
         debug.print("PUSH ", max_prox)
     } else {
-        debug.print("ESCAPE ", max_prox)
+        debug.print("ESCAPE ", normalize_angle(new_heading))
     }
 
     # record pose
     last_x = pose.position.x
     last_y = pose.position.y
+
 }
 
 function reset() {
@@ -158,84 +165,22 @@ function reset() {
 function destroy() {
 }
 
-function process_search_state() {
-    # check if we are in contact with an object
-    if (get_contact()) {
-        # transition to push state
-        state = PUSH
-        log("robot: ", id, " - contact made - transition SEARCH to PUSH")
-    } else {
-        # drive forward
-        set_wheels(MAX_SPEED, MAX_SPEED)
-    }
-}
-
-function process_push_state() {
-    # check if we are in contact with an object
-    if (not get_contact()) {
-        # transition to search state
-        state = SEARCH
-        log("robot: ", id, " - contact lost - transition PUSH to SEARCH ")
-    } else {
-        # make sure we have a task
-        new = false
-        if (goal_block < 0) {
-            goal_block = get_goal_block()
-            new        = true
-        }
-
-        if (goal_block < 0) {
-            state = ESCAPE
-            log("robot: ", id, " - no accomplishable tasks - transition PUSH to ESCAPE")
-        } else {
-            blocks.put(goal_block, string.tostring(pose.position.y))
-            log("robot: ", id, " - assigned to task ", goal_block, " at y=", block_locations[goal_block])
-
-            # check if we are done with our task
-            goal_distance = get_goal_distance()
-            if (goal_distance < 0.01) {
-                # mark task as complete
-                blocks.put(goal_block, "placed")
-                goal_block = -1
-
-                # transition to escape state
-                state = ESCAPE
-                log("robot: ", id, " - task complete - transition PUSH to ESCAPE")
-            } else {
-                # check if we are stuck
-                traveled_distance = math.sqrt((pose.position.x - last_x) ^ 2 + (pose.position.y - last_y) ^ 2)
-                if ((not new) and (traveled_distance < STUCK_THRES)) {
-                    # mark task as incomplete
-                    blocks.put(goal_block, "unassigned")
-                    goal_block = -1
-
-                    # transition to escape state
-                    state = ESCAPE
-                    log("robot: ", id, " - stuck - transition PUSH to ESCAPE")
-                } else {
-                    # start with forward motion
-                    base_speed = math.min(MAX_SPEED, Kp_dist * goal_distance)
-
-                    # adjust motion to account for heading error
-                    goal_heading = get_goal_heading()
-                    yaw_error    = (goal_heading - pose.orientation.yaw + math.pi) % (2 * math.pi) - math.pi
-                    w            = Kp_heading * yaw_error
-
-                    # drive
-                    set_wheels(base_speed - w, base_speed + w)
-                }
-            }
-        }
-    }
+function change_state(new_state) {
+    if (newState == ESCAPE) {
+        new_heading = math.random.uniform(-math.pi, math.pi)
+				next_state = SEARCH
+    } 
+    state = new_state
 }
 
 function process_escape_state() {
-    if (get_contact()) {
+		new_heading = normalize_angle(new_heading)
+    if (math.abs(new_heading - pose.orientation.yaw) > 0.1) {
         # rotate
         set_wheels(-MAX_SPEED, MAX_SPEED)
     } else {
-        state = SEARCH
-        log("robot: ", id, " - escaped - transition ESCAPE to SEARCH")
+        state = next_state;
+        log("robot: ", id, " - escaped - transition ESCAPE to ", next_state)
     }
 }
 

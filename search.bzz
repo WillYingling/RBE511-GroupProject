@@ -1,0 +1,138 @@
+
+function process_search_state2() {
+    set_wheels(MAX_SPEED, MAX_SPEED)
+
+		if (get_contact()) {
+			if (is_nearer_goal(pose.orientation.yaw)) {
+				log("found construction material directly aheading, transitioning to push")
+				state = PUSH
+				return
+			} else {
+				log("found obstacle, searching for new heading")
+				new_heading = pose.orientation.yaw + math.pi + math.rng.uniform(-math.pi/4, math.pi/4)
+				next_state = SEARCH
+				state = ESCAPE
+			}
+		}
+
+    for (i = 2, i < 7, i = i+1) {
+        # We detect something in this range
+        if (proximity[i].value > 0.5) {
+            obstacle_heading = proximity[i].angle+pose.orientation.yaw
+            if (not is_obstacle_wall(obstacle_heading)) {
+            	if (is_nearer_goal(obstacle_heading)) {
+                	next_state = PUSH
+                	new_heading = obstacle_heading
+              	  state = ESCAPE
+            	}
+			}
+        }
+    }
+}
+
+function is_nearer_goal(rad) {
+    if (pose.position.x > 0) {
+        if (rad > math.pi / 2 or rad < -math.pi / 2) {
+            return 1
+        }
+    } else if (pose.position.x <= 0 ) {
+        if (rad <= math.pi/2 and math.rad >= -math.pi/2) {
+            return 1
+        }
+    }
+    return 0
+}
+
+function is_obstacle_wall(rad) {
+    delta = 0.1
+    obstacle_x = pose.position.x + (delta * math.cos(rad))
+    obstacle_y = pose.position.y + (delta * math.sin(rad))
+    if (obstacle_x > 1.8) {
+        return 1
+    } else if (obstacle_x < -1.8) {
+        return 2
+    } else if (obstacle_y > 1.8) {
+        return 3
+    } else if (obstacle_y < -1.8) {
+        return 4
+    }
+    return 0
+}
+
+function process_search_state() {
+    goal_x = 0;
+    goal_y = pose.position.y
+
+    diff_x = pose.position.x - goal_x
+    diff_y = 0
+
+    goal_heading = math.atan(diff_y, diff_x)
+    debug.rays.add(255, 0, 0, pose.position.x + 5*math.cos(goal_heading), pose.position.y + 5*math.sin(goal_heading), 0.0)
+		log("x position: ", pose.position.x, ", goal heading: ", goal_heading)
+    # check if we are in contact with an object
+    if (get_contact()) {
+        wall = facing_wall()
+        # if we're facing a block, enter push state
+        if (wall == 0) {
+            log("robot: ", id, " - contact made - transition SEARCH to PUSH")
+            state = PUSH
+        } else {
+            log("robot: ", id, " - facing wall: ", wall)
+            # Otherwise, pick a heading away from the wall and continue searching
+            if (wall == 1) {
+                new_heading = math.rng.uniform(-math.pi, math.pi)
+            } else if (wall == 2) {
+                new_heading = math.rng.uniform(-math.pi, 0)
+            } else if (wall == 3) {
+                new_heading = math.rng.uniform(-math.pi/4, math.pi/4)
+            } else {
+                new_heading = math.rng.uniform(0, math.pi)
+            }
+            state = ESCAPE
+        }
+    } else {
+        # drive forward
+        set_wheels(MAX_SPEED, MAX_SPEED)
+    }
+}
+
+function normalize_angle(rad) {
+    return math.atan(math.sin(rad), math.cos(rad))
+}
+
+function deg2rad(deg) {
+    return deg * (math.pi/180.0)
+}
+function rad2deg(rad) {
+    return rad * (180.0/math.pi) % 360
+}
+
+function facing_wall() {
+    heading_deg = rad2deg(pose.orientation.yaw)
+    x = pose.position.x
+    y = pose.position.y
+    log("checking for wall - heading_deg: ", heading_deg, " x: ", x, " y: ", y)
+    if ((heading_deg < 45.0) and (heading_deg >= -45.0)) { # right wall
+				log("checking right wall")
+        if (x > 1.8) {
+            return 1
+        }
+    } else if ((heading_deg >= 45.0) and (heading_deg < 135.0)) { # top wall
+log("checking top wall")
+        if (y > 1.8) {
+            return 2
+        }
+    } else if ((heading_deg >= 135.0) or (heading_deg < -135.0)) { # left wall
+log("checking left wall")
+        if (x < -1.8) {
+            return 3
+        }
+    } else if ((heading_deg >= -135.0) and (heading_deg < -45.0)) { # bottom wall
+log("checking bottom wall")
+        if (y < -1.8) {
+            return 4
+        }
+    }
+
+    return 0
+}
