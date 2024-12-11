@@ -166,8 +166,8 @@ function destroy() {
 }
 
 function change_state(new_state) {
-    if (newState == ESCAPE) {
-        new_heading = math.random.uniform(-math.pi, math.pi)
+    if (new_state == ESCAPE) {
+        new_heading = math.rng.uniform(-math.pi, math.pi)
 				next_state = SEARCH
     } 
     state = new_state
@@ -181,14 +181,14 @@ function process_push_state() {
         log("robot: ", id, " - contact lost - transition PUSH to SEARCH ")
     } else {
         # make sure we have a task
-        new = false
+        new = 0
         if (goal_block < 0) {
             goal_block = get_goal_block()
-            new        = true
+            new        = 1
         }
 
         if (goal_block < 0) {
-            state = ESCAPE
+            change_state(ESCAPE);
             log("robot: ", id, " - no accomplishable tasks - transition PUSH to ESCAPE")
         } else {
             blocks.put(goal_block, string.tostring(pose.position.y))
@@ -202,7 +202,7 @@ function process_push_state() {
                 goal_block = -1
 
                 # transition to escape state
-                state = ESCAPE
+                change_state(ESCAPE);
                 log("robot: ", id, " - task complete - transition PUSH to ESCAPE")
             } else {
                 # check to make sure we are not moving a placed block
@@ -212,7 +212,7 @@ function process_push_state() {
                     goal_block = -1
 
                     # transition to escape state
-                    state = ESCAPE
+                    change_state(ESCAPE)
                     log("robot: ", id, " - avoiding moving placed block - transition PUSH to ESCAPE")
                 } else {
                     # check if we are stuck
@@ -223,7 +223,7 @@ function process_push_state() {
                         goal_block = -1
 
                         # transition to escape state
-                        state = ESCAPE
+                        change_state(ESCAPE)
                         log("robot: ", id, " - stuck - transition PUSH to ESCAPE")
                     } else {
                         # start with forward motion

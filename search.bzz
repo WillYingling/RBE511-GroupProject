@@ -1,12 +1,12 @@
-
+IGNORE_MATERIAL_THRESHOLD = 0.3
 function process_search_state2() {
     set_wheels(MAX_SPEED, MAX_SPEED)
 
 		if (get_contact()) {
 			if (is_nearer_goal(pose.orientation.yaw)) {
-				log("found construction material directly aheading, transitioning to push")
-				state = PUSH
-				return
+					log("found construction material directly aheading, transitioning to push")
+					state = PUSH
+					return
 			} else {
 				log("found obstacle, searching for new heading")
 				new_heading = pose.orientation.yaw + math.pi + math.rng.uniform(-math.pi/4, math.pi/4)
@@ -20,7 +20,7 @@ function process_search_state2() {
         if (proximity[i].value > 0.5) {
             obstacle_heading = proximity[i].angle+pose.orientation.yaw
             if (not is_obstacle_wall(obstacle_heading)) {
-            	if (is_nearer_goal(obstacle_heading)) {
+            	if (is_nearer_goal(obstacle_heading) and math.abs(pose.position.x) > IGNORE_MATERIAL_THRESHOLD) {
                 	next_state = PUSH
                 	new_heading = obstacle_heading
               	  state = ESCAPE
